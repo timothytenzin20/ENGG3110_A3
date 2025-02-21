@@ -1,0 +1,24 @@
+
+This shows two-process, one-way communication using shared memory
+IPC govered by semaphores.
+
+This is a simple producer/consumer example as discussed in class.
+
+Because the data flow is one way, there are some major simplifications
+which you will need to think about differently in the assigment.
+
+The main ones are:
+  - in this example it is clear which process is started first (print),
+    so that process can create the shared memory & semaphores, and
+    initialize them with the appropriate values.  In your work, you will
+    have to figure out whether you are the "first one" or not.
+
+  - when cleaning up, the same simplification applies -- we have chosen
+    which process is the "last one out" -- this process can then clean
+    up.  Think about how you can manage this in your code.
+
+Hint:
+    Check the man page for shmget().  By using the right flags, you can
+    figure out whether a shared memory segment or semaphore already exists
+    for a given key -- how does this help you?
+
