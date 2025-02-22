@@ -81,16 +81,14 @@ setupSystem()
 	 * Semaphores are meaningless if they are not initialized.
 	 */
 	for (i = 0; i < N_NODES; i++) {
-    // Initialize buffer semaphores for data transfer between nodes
-    INITIALIZE_SEM(control, EMPTY(i), 1);    // Buffer starts empty
-    INITIALIZE_SEM(control, FILLED(i), 0);   // No data initially
-    
-    // Initialize packet control semaphores
-    INITIALIZE_SEM(control, TO_SEND(i), 1);  // Ready to send initially
+    INITIALIZE_SEM(control, EMPTY(i), 1);    
+    INITIALIZE_SEM(control, FILLED(i), 0);   // no data initially
+    // packet control semaphores
+    INITIALIZE_SEM(control, TO_SEND(i), 1);  // initially prepared to send 
 	}
 
-	// Initialize critical section semaphore
-	INITIALIZE_SEM(control, CRIT, 1);    // Mutex for shared data access
+	// critical section semaphore
+	INITIALIZE_SEM(control, CRIT, 1);    // shared data access
 
 	/*
 	 * And initialize the shared data
@@ -123,7 +121,7 @@ runSimulation(control, numberOfPackets)
 {
 	int num, to;
 	int i;
-    pid_t pid;
+    pid_t pid; // process ID 
 
 	/*
 	 * Fork off the children that simulate the disks.
@@ -132,16 +130,16 @@ runSimulation(control, numberOfPackets)
         pid = fork();
         
         if (pid < 0) {
-            // Fork failed
+            // failed
             panic("Fork failed for node %d\n", i);
         }
         else if (pid == 0) {
-            // Child process
-            token_node(control, i);  // Run the node simulation
-            exit(0);  // Child exits after completing its work
+            // child process
+            token_node(control, i);  // node simulation
+            exit(0);  // exit upon completion
         }
         else{
-			// Parent continues to next iteration
+			// parent process
 			continue;
 		}
 
