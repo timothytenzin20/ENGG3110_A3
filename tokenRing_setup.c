@@ -81,10 +81,10 @@ setupSystem()
 	 * Semaphores are meaningless if they are not initialized.
 	 */
 	for (i = 0; i < N_NODES; i++) {
-    INITIALIZE_SEM(control, EMPTY(i), 1);    
-    INITIALIZE_SEM(control, FILLED(i), 0);   // no data initially
-    // packet control semaphores
-    INITIALIZE_SEM(control, TO_SEND(i), 1);  // initially prepared to send 
+		INITIALIZE_SEM(control, EMPTY(i), 1);    
+		INITIALIZE_SEM(control, FILLED(i), 0);   // no data initially
+		// packet control semaphores
+		INITIALIZE_SEM(control, TO_SEND(i), 1);  // initially prepared to send 
 	}
 
 	// critical section semaphore
@@ -100,6 +100,7 @@ setupSystem()
 		control->shared_ptr->node[i].terminate = 0;
 		control->shared_ptr->node[i].to_send.length = 0;
 		control->shared_ptr->node[i].data_xfer = 0;
+		control->shared_ptr->node[i].to_send.token_flag = '1'; 
 	}
 
 #ifdef DEBUG
@@ -191,11 +192,13 @@ cleanupSystem(control)
 	 * Now wait for all nodes to finish sending and then tell them
 	 * to terminate.
 	 */
-	for (i = 0; i < N_NODES; i++)
+	for (i = 0; i < N_NODES; i++){
 		WAIT_SEM(control, TO_SEND(i));
+	}
 	WAIT_SEM(control, CRIT);
-	for (i = 0; i < N_NODES; i++)
+	for (i = 0; i < N_NODES; i++){
 		control->shared_ptr->node[i].terminate = 1;
+	}
 	SIGNAL_SEM(control, CRIT);
 
 #ifdef DEBUG
