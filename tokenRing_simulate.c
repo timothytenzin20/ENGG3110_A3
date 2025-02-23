@@ -1,3 +1,29 @@
+/* References
+• author: Andrew Hamilton-Wright
+• name: semaphore_process_demo.c
+• year: 2001
+• source: Course Directory
+
+• author: Andrew Hamilton-Wright
+• name: semaphore_process2
+• year: 2001
+• source: Course Directory
+
+• author: geeksforgeeks
+• name: How to use POSIX semaphores in C language
+• year: 2025
+• source: https://www.geeksforgeeks.org/use-posix-semaphores-c/
+
+• author: stackoverflow
+• name: How to create semaphores in shared memory in C?
+• year: 2023
+• source: https://stackoverflow.com/questions/32153151/how-to-create-semaphores-in-shared-memory-in-c
+
+• author: GitHub - kernohad
+• name: Token-ring-communication-simulation
+• year: 2018
+• source: https://github.com/kernohad/Token-ring-communication-simulation/blob/master/simulation.c
+*/
 /*
 *	CIS3110: Assignment 2
 *	Submitted To: Andrew-Hamilton Wright
