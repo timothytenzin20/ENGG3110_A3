@@ -173,6 +173,12 @@ runSimulation(control, numberOfPackets)
 		control->shared_ptr->node[num].to_send.to = (char)to;
 		control->shared_ptr->node[num].to_send.from = (char)num;
 		control->shared_ptr->node[num].to_send.length = (random() % MAX_DATA) + 1;
+		
+		// initialize packet data with test content
+		for (int j = 0; j < control->shared_ptr->node[num].to_send.length; j++) {
+			control->shared_ptr->node[num].to_send.data[j] = 'A' + (j % 26); // fill with A-Z repeatedly
+		}
+
 		SIGNAL_SEM(control, CRIT);
 	}
 
@@ -183,7 +189,7 @@ int
 cleanupSystem(control)
 	struct TokenRingData *control;
 {
-    	int child_status;
+    int child_status;
 	union semun zeroSemun;
 	int i;
 
