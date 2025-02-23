@@ -1,4 +1,10 @@
 /*
+*	CIS3110: Assignment 2
+*	Submitted To: Andrew-Hamilton Wright
+* 	Submitted By: Timothy Khan 1239165
+*	Date: February 24, 2025
+*/
+/*
  * The program simulates a Token Ring LAN by forking off a process
  * for each LAN node, that communicate via shared memory, instead
  * of network cables. To keep the implementation simple, it jiggles
