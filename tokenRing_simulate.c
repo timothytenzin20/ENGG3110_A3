@@ -26,91 +26,157 @@ token_node(control, num)
 	struct TokenRingData *control;
 	int num;
 {
+	// state tracking variables
 	int rcv_state = TOKEN_FLAG, not_done = 1, sending = 0, len;
 	unsigned char byte;
-	struct data_pkt pkt;
+	// node role flags
+	char producer, consumer;
 
 	/*
 	 * If this is node #0, start the ball rolling by creating the
 	 * token.
 	 */
 	if (num == 0) {
-		send_byte(control, num, 0x01);  // send token
+		send_byte(control, num, '0');  
+#ifdef DEBUG
+	fprintf(stderr, "YUH FIRST TOKEN @ THE NODE #%d.\n", num);
+#endif
 	}
 	/*
 	 * Loop around processing data, until done.
 	 */
 	while (not_done) {
-		byte = rcv_byte(control, num); // processes incoming bytes
+		byte = rcv_byte(control, num); // get byte from previous node
+#ifdef DEBUG
+        fprintf(stderr, "@ Node %d: Received byte 0x%02X in state %d\n", num, byte, rcv_state);
+#endif
 		/*
 		 * Handle the byte, based upon current state.
 		 */
 		switch (rcv_state) {
 		case TOKEN_FLAG:
-			if (byte == 0x01) {  // token received
-				WAIT_SEM(control, CRIT);
-				if (control->shared_ptr->node[num].to_send.length > 0) {
-					control->snd_state = TOKEN_FLAG;
-					sending = 1;
-					send_pkt(control, num);
-				} else {
-					send_byte(control, num, byte);  // Forward token
+			// check if node can send data
+			WAIT_SEM(control, CRIT);
+#ifdef DEBUG
+            fprintf(stderr, "@ Node %d: Token check - current token_flag=%c\n", 
+                    num, control->shared_ptr->node[num].to_send.token_flag);
+#endif
+			if (byte == '0'){
+                if (control->shared_ptr->node[num].to_send.token_flag == '0') {
+                	producer = 1;
+					consumer = 0;
+            	} 
+				else {
+					producer = 0;
+					consumer = 1;
 				}
-				SIGNAL_SEM(control, CRIT);
-			} else {
-				pkt.token_flag = byte;
-				rcv_state = TO;
 			}
+
+			SIGNAL_SEM(control, CRIT);
+			
+			if (byte == '0') {
+				if (producer == 1 && consumer == 0) {
+#ifdef DEBUG
+                fprintf(stderr, "@ Node %d: Starting to send packet\n", num);
+#endif
+					control->snd_state = TOKEN_FLAG;
+					send_pkt(control, num);
+					rcv_state = TO;
+				}
+				else {
+					WAIT_SEM(control, CRIT);
+
+					if (control->shared_ptr->node[num].terminate == 1) {
+						printf("KILLING MY SON/CHILD: %d\n", num);
+						not_done = 0;
+					}
+					SIGNAL_SEM(control, CRIT);
+					send_byte(control, num, byte);
+					rcv_state = TOKEN_FLAG;
+				}
+			} 
+			else {
+                send_byte(control, num, byte);
+                rcv_state = TO;
+            }
 			break;
 
 		case TO:
-			pkt.to = byte;
+			// handle destination address
 			rcv_state = FROM;
-			if (!sending) send_byte(control, num, byte);
+			if (producer == 1 && consumer == 0) {
+				send_pkt(control, num);
+			} 
+			else {
+				send_byte(control, num, byte);
+			}
 			break;
 
 		case FROM:
-			pkt.from = byte;
-			if (pkt.from == num) {
-				sending = 0;  // Our packet came back
-				send_byte(control, num, 0x01);  // Send token
-				SIGNAL_SEM(control, TO_SEND(num));
-			} else if (!sending) {
+			// handle source address
+			rcv_state = LEN;
+			if (producer == 1 && consumer == 0) {
+				send_pkt(control, num);
+			} 
+			else {
 				send_byte(control, num, byte);
 			}
-			rcv_state = LEN;
 			break;
 
 		case LEN:
-			len = byte;
-			pkt.length = byte;
-			if (!sending) send_byte(control, num, byte);
-			if (len == 0) {
-				rcv_state = TOKEN_FLAG;
-			} else {
+			// process packet length and prepare for data
+			if (producer == 1 && consumer == 0) {
+				send_pkt(control, num);
+				WAIT_SEM(control, CRIT);
+				len = control->shared_ptr->node[num].to_send.length;
+				SIGNAL_SEM(control, CRIT);
+			}
+			else {
+				send_byte(control, num, byte);
+				len = (int) byte;
+			}
+			sending = 0;
+			if (len > 0) {
 				rcv_state = DATA;
+			}
+			else {
+				rcv_state = TOKEN_FLAG;
 			}
 			break;
 
 		case DATA:
-			if (!sending) send_byte(control, num, byte);
-			len--;
-			if (len == 0) {
-				rcv_state = TOKEN_FLAG;
-				if (pkt.to == num) {
-					WAIT_SEM(control, CRIT);
-					control->shared_ptr->node[num].received++;
-					SIGNAL_SEM(control, CRIT);
+			// transfer packet data bytes
+#ifdef DEBUG
+            fprintf(stderr, "@ Node %d: Processing DATA, sending=%d, len=%d\n", 
+                    num, sending, len);
+#endif
+			if (sending < (len-1)) {
+				if (producer == 1 && consumer == 0) {
+					send_pkt(control, num);
 				}
+				else {
+					send_byte(control, num, byte);
+				}	
+				rcv_state = DATA;
 			}
+			else {
+				if (producer == 1 && consumer == 0) {
+					send_pkt(control, num);
+				}
+				else {
+					send_byte(control, num, byte);
+				}
+				producer = 0;
+				consumer = 1;
+				rcv_state = TOKEN_FLAG;
+			}
+			sending++;
 			break;
-		}
-
-		// check termination condtions
-		WAIT_SEM(control, CRIT);
-		not_done = !control->shared_ptr->node[num].terminate;
-		SIGNAL_SEM(control, CRIT);
+		};
 	}
+#ifdef DEBUG
+    fprintf(stderr, "@ Node %d: Terminating\n", num);
+#endif
 }
 
 /*
@@ -122,44 +188,84 @@ send_pkt(control, num)
 	struct TokenRingData *control;
 	int num;
 {
-	static int sndpos = 0;
-    static int sndlen;
+	// packet sending state variables
+	static int sndpos, sndlen, node_index;  
 
-	switch (control->snd_state) {
-	case TOKEN_FLAG:
-		send_byte(control, num, 0x00);  // data packet
-		control->snd_state = TO;
-		break;
+    switch (control->snd_state) {
+    case TOKEN_FLAG:
+		// start packet transmission with token
+#ifdef DEBUG
+        fprintf(stderr, "@ Node %d: Sending packet header\n", num);
+#endif
+        WAIT_SEM(control, CRIT);
+        control->shared_ptr->node[num].sent++;
+        node_index = (int) control->shared_ptr->node[num].to_send.to; // get destination node
+        control->shared_ptr->node[node_index].received++; 
+        control->shared_ptr->node[num].to_send.token_flag = '1';
+        SIGNAL_SEM(control, CRIT);
+        
+        send_byte(control, num, control->shared_ptr->node[num].to_send.token_flag);
+        control->snd_state = TO;
+        sndpos = 0;
+        
+        WAIT_SEM(control, CRIT);
+        sndlen = control->shared_ptr->node[num].to_send.length;
+        SIGNAL_SEM(control, CRIT);
+        break;
 
-	case TO:
+    case TO:
+		// send destination node id
 		send_byte(control, num, control->shared_ptr->node[num].to_send.to);
 		control->snd_state = FROM;
 		break;
 
 	case FROM:
+		// send source node id
 		send_byte(control, num, control->shared_ptr->node[num].to_send.from);
 		control->snd_state = LEN;
 		break;
 
 	case LEN:
-		sndlen = control->shared_ptr->node[num].to_send.length;
-		sndpos = 0;
-		send_byte(control, num, sndlen);
+		// send packet length
+		send_byte(control, num, control->shared_ptr->node[num].to_send.length);
 		control->snd_state = DATA;
 		break;
 
 	case DATA:
-		send_byte(control, num, control->shared_ptr->node[num].to_send.data[sndpos++]);
-		if (sndpos >= sndlen) {
+		// transmit packet data bytes
+#ifdef DEBUG
+        fprintf(stderr, "@ Node %d: Sending data byte %d of %d\n", 
+                num, sndpos, sndlen);
+#endif
+		if (sndpos < (sndlen-1)) {
+			send_byte(control, num, control->shared_ptr->node[num].to_send.data[sndpos]);
+			sndpos++;
+			control->snd_state = DATA;
+			break;
+		} else {
+			WAIT_SEM(control, CRIT);
 			control->snd_state = DONE;
-			control->shared_ptr->node[num].sent++;
-			control->shared_ptr->node[num].to_send.length = 0;  // clear packet
-			SIGNAL_SEM(control, TO_SEND(num));  // signal to accept another packet
+			SIGNAL_SEM(control, CRIT);
 		}
-		break;
 
 	case DONE:
-		break;
+		// complete transmission and release token
+#ifdef DEBUG
+        fprintf(stderr, "@ Node %d: Packet transmission complete\n", num);
+#endif
+		WAIT_SEM(control, CRIT);
+        printf("\ncontents at node: %d is: ", num);
+        for (node_index = 0; node_index < control->shared_ptr->node[num].to_send.length; node_index++) { 
+            printf("%c", control->shared_ptr->node[num].to_send.data[node_index]);
+        }
+        printf("\n\n");
+        control->shared_ptr->node[num].to_send.token_flag = '1';
+        
+        control->snd_state = TOKEN_FLAG;
+        send_byte(control, num, '0');
+        SIGNAL_SEM(control, TO_SEND(num));
+        SIGNAL_SEM(control, CRIT);
+        break;
 	};
 }
 
@@ -172,8 +278,11 @@ send_byte(control, num, byte)
 	int num;
 	unsigned byte;
 {
+	// pass byte to next node in ring
 	int next = (num + 1) % N_NODES;
-	
+#ifdef DEBUG
+    fprintf(stderr, "@ Node %d: Sending byte 0x%02X to node %d\n", num, byte, next);
+#endif
 	WAIT_SEM(control, EMPTY(next));
 	control->shared_ptr->node[next].data_xfer = byte;
 	SIGNAL_SEM(control, FILLED(next));
@@ -187,11 +296,15 @@ rcv_byte(control, num)
 	struct TokenRingData *control;
 	int num;
 {
+	// get byte from previous node in ring
 	unsigned char byte;
-
-	WAIT_SEM(control, FILLED(num));
-	byte = control->shared_ptr->node[num].data_xfer;
-	SIGNAL_SEM(control, EMPTY(num));
+	int previous = (num + N_NODES - 1) % N_NODES;
+	WAIT_SEM(control, FILLED(previous));
+	byte = control->shared_ptr->node[previous].data_xfer;
+#ifdef DEBUG
+	fprintf(stderr, "@ Node %d: Received byte 0x%02X\n", num, byte);
+#endif
+	SIGNAL_SEM(control, EMPTY(previous));
 	
 	return byte;
 }
