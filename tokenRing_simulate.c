@@ -1,6 +1,7 @@
 /*
-*	CIS3110 Assignment 2 
-* 	Submission: Timothy Khan 1239165
+*	CIS3110: Assignment 2
+*	Submitted To: Andrew-Hamilton Wright
+* 	Submitted By: Timothy Khan 1239165
 *	Date: February 24, 2025
 */
 
