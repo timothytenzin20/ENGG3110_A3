@@ -17,7 +17,7 @@ clean :
 	@ rm -f $(OBJS)
 
 $(TARFILE) tarfile tar :
-	tar cvf $(TARFILE) README *.c *.h makefile
+	tar cvf $(TARFILE) README *.md *.c *.h makefile
 
 tokenRing_main.o : tokenRing_main.c tokenRing.h
 tokenRing_setup.o : tokenRing_setup.c tokenRing.h
