@@ -76,7 +76,7 @@ setupSystem()
 		return NULL;
 	}
 
-	// Allocate semaphore array - each semaphore needs its own allocation
+	// allocate semaphore array
 	control->sems = malloc(NUM_SEM * sizeof(sem_t));
 	if (!control->sems) {
 		fprintf(stderr, "Failed to allocate semaphore array\n");
@@ -84,7 +84,7 @@ setupSystem()
 		return NULL;
 	}
 
-	// Allocate shared data
+	// allocate shared data
 	control->shared_ptr = (struct shared_data *)malloc(sizeof(struct shared_data));
 	if (!control->shared_ptr) {
 		fprintf(stderr, "Failed to allocate shared data\n");
@@ -93,14 +93,14 @@ setupSystem()
 		return NULL;
 	}
 
-	// Allocate thread arguments array
+	// allocate thread arguments
 	control->thread_args = malloc(N_NODES * sizeof(struct token_args));
 	if (!control->thread_args) {
 		fprintf(stderr, "Failed to allocate thread arguments\n");
 		goto FAIL;
 	}
 
-	// Initialize all semaphores
+	// initialize semaphores
 	for (i = 0; i < NUM_SEM; i++) {
 		if (sem_init(&control->sems[i], 0, (i < N_NODES || i >= FILLED0 + N_NODES) ? 1 : 0) < 0) {
 			fprintf(stderr, "Failed to initialize semaphore %d\n", i);
@@ -108,7 +108,7 @@ setupSystem()
 		}
 	}
 
-	// Initialize node data
+	// initialize node 
 	for (i = 0; i < N_NODES; i++) {
 		control->shared_ptr->node[i].sent = 0;
 		control->shared_ptr->node[i].received = 0;
@@ -119,7 +119,7 @@ setupSystem()
 		control->node_numbers[i] = i; 
 	}
 
-	// Initialize thread arguments
+	// initialize thread 
 	for (i = 0; i < N_NODES; i++) {
 		control->thread_args[i].control = control;
 		control->thread_args[i].node_num = i;
@@ -132,7 +132,7 @@ FAIL:
 	if (control) {
 		if (control->thread_args) free(control->thread_args);
 		if (control->sems) {
-			// Destroy any initialized semaphores
+			// destroy initialized semaphores
 			for (int j = 0; j < i; j++) {
 				sem_destroy(&control->sems[j]);
 			}
@@ -211,8 +211,9 @@ runSimulation(control, numberOfPackets)
 		}
 	}
 
-	// Ensure proper termination of all nodes
-    printf("Setting termination flags for all nodes\n");
+#ifdef DEBUG
+    fprintf(stderr, "Setting termination flags for all nodes\n");
+#endif
     if (sem_wait(&control->sems[CRIT]) < 0) {
         panic("Wait sem failed errno=%d\n", errno);
     }
@@ -220,9 +221,11 @@ runSimulation(control, numberOfPackets)
     control->shared_ptr->cleanup_in_progress = 1;
     for (i = 0; i < N_NODES; i++) {
         control->shared_ptr->node[i].terminate = 1;
-        printf("Set termination flag for node %d\n", i);
+#ifdef DEBUG
+        fprintf(stderr, "Set termination flag for node %d\n", i);
+#endif
         
-        // Release any blocked semaphores
+        // release blocked semaphores
         sem_post(&control->sems[FILLED(i)]);
         sem_post(&control->sems[EMPTY(i)]);
         sem_post(&control->sems[TO_SEND(i)]);
@@ -231,20 +234,30 @@ runSimulation(control, numberOfPackets)
     if (sem_post(&control->sems[CRIT]) < 0) {
         panic("Signal sem failed errno=%d\n", errno);
     }
-    printf("Released CRIT after setting termination flags\n");
+#ifdef DEBUG
+    fprintf(stderr, "Released CRIT after setting termination flags\n");
+#endif
 
-    // Force one final token pass to ensure nodes can check termination
+    // ensure nodes can check termination
     send_byte(control, 0, '0');
-    printf("Sent final token to initiate termination\n");
+#ifdef DEBUG
+    fprintf(stderr, "Sent final token to initiate termination\n");
+#endif
 
-    printf("Waiting for threads to terminate...\n");
+#ifdef DEBUG
+    fprintf(stderr, "Waiting for threads to terminate...\n");
+#endif
     
-    // Wait for threads with timeout
+    // wait for threads with timeout
     for (i = 0; i < N_NODES; i++) {
         if (pthread_join(control->threads[i], NULL) != 0) {
-            printf("Warning: Thread %d join failed\n", i);
+#ifdef DEBUG
+            fprintf(stderr, "Warning: Thread %d join failed\n", i);
+#endif
         } else {
-            printf("Thread %d joined successfully\n", i);
+#ifdef DEBUG
+            fprintf(stderr, "Thread %d joined successfully\n", i);
+#endif
         }
     }
 
@@ -257,17 +270,19 @@ cleanupSystem(control)
 {
     int i;
 
-    // Print results
+    // print results
     for (i = 0; i < N_NODES; i++) {
-        printf("Node %d: sent=%d received=%d\n", i,
+#ifdef DEBUG
+        fprintf(stderr, "Node %d: sent=%d received=%d\n", i,
             control->shared_ptr->node[i].sent,
             control->shared_ptr->node[i].received);
+#endif
     }
 
     fflush(stdout);
     fflush(stderr);
 
-    // Cleanup semaphores and memory
+    // semaphores and memory
     for (i = 0; i < NUM_SEM; i++) {
         sem_destroy(&control->sems[i]);
     }

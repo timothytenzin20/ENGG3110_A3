@@ -50,30 +50,28 @@
 #include "tokenRing.h"
 
 /*
- * Helper function to implement timed thread join without GNU extensions
+ * implement thread join based on time
  */
 int join_thread_with_timeout(pthread_t thread, void **retval, struct timespec *timeout) {
     struct timespec start_time, current_time;
     clock_gettime(CLOCK_REALTIME, &start_time);
     
     while (1) {
-        // Try a non-blocking join
         int join_result = pthread_join(thread, retval);
         if (join_result == 0) {
-            return 0; // Successfully joined
+            return 0; 
         }
         
-        // Check if we've exceeded the timeout
+        // check if we've exceeded the timeout
         clock_gettime(CLOCK_REALTIME, &current_time);
         if ((current_time.tv_sec - start_time.tv_sec) > timeout->tv_sec ||
             ((current_time.tv_sec - start_time.tv_sec) == timeout->tv_sec &&
              current_time.tv_nsec - start_time.tv_nsec > timeout->tv_nsec)) {
-            pthread_cancel(thread);  // Cancel the thread if timeout exceeded
+            pthread_cancel(thread);  
             return ETIMEDOUT;
         }
         
-        // Sleep briefly before trying again
-        usleep(1000); // Sleep for 1ms
+        usleep(1000);
     }
 }
 
@@ -104,20 +102,22 @@ void *token_node(void *arg) {
      * Loop around processing data, until done.
      */
     while (not_done) {
-        // Check termination flag first
+        // check termination flag 
         if (sem_wait(&control->sems[CRIT]) < 0) {
             panic("Wait sem failed errno=%d\n", errno);
         }
         if (control->shared_ptr->node[num].terminate || 
             control->shared_ptr->cleanup_in_progress) {
-            printf("Node %d: Detected terminate flag, breaking loop\n", num);
+#ifdef DEBUG
+            fprintf(stderr, "Node %d: Detected terminate flag, breaking loop\n", num);
+#endif
             sem_post(&control->sems[CRIT]);
             not_done = 0;
             break;
         }
         sem_post(&control->sems[CRIT]);
         
-        // Only proceed with normal operation if not terminating
+        // if not terminating we can proceed    
         if (not_done) {
             byte = rcv_byte(control, num); // get byte from previous node
 #ifdef DEBUG
@@ -166,7 +166,9 @@ void *token_node(void *arg) {
                         }
 
                         if (control->shared_ptr->node[num].terminate == 1) {
-                            printf("KILLING MY SON/CHILD: %d\n", num);
+#ifdef DEBUG
+                            fprintf(stderr, "KILLING MY SON/CHILD: %d\n", num);
+#endif
                             not_done = 0;
                         }
                         if (sem_post(&control->sems[CRIT]) < 0) {
@@ -264,12 +266,13 @@ void *token_node(void *arg) {
     fprintf(stderr, "@ Node %d: Terminating\n", num);
 #endif
 
-    // Flush any buffered output
     fflush(stdout);
     
-    printf("Node %d: Clean exit\n", num);
+#ifdef DEBUG
+    fprintf(stderr, "Node %d: Clean exit\n", num);
+#endif
     pthread_exit(NULL);
-    return NULL;  // Never reached, but keeps compiler happy
+    return NULL;  
 }
 
 /*
@@ -361,11 +364,13 @@ send_pkt(control, num)
         if (sem_wait(&control->sems[CRIT]) < 0) {
             panic("Wait sem failed errno=%d\n", errno);
         }
-        printf("\ncontents at node: %d is: ", num);
+#ifdef DEBUG
+        fprintf(stderr, "\ncontents at node: %d is: ", num);
         for (node_index = 0; node_index < control->shared_ptr->node[num].to_send.length; node_index++) { 
-            printf("%c", control->shared_ptr->node[num].to_send.data[node_index]);
+            fprintf(stderr, "%c", control->shared_ptr->node[num].to_send.data[node_index]);
         }
-        printf("\n\n");
+        fprintf(stderr, "\n\n");
+#endif
         control->shared_ptr->node[num].to_send.token_flag = '1';
         
         control->snd_state = TOKEN_FLAG;
@@ -391,7 +396,7 @@ send_byte(control, num, byte)
 {
     int next = (num + 1) % N_NODES;
 
-    // Quick check for termination before proceeding
+    // check termination before proceeding
     if (sem_wait(&control->sems[CRIT]) < 0) {
         panic("Wait sem failed errno=%d\n", errno);
     }
@@ -402,35 +407,51 @@ send_byte(control, num, byte)
     }
     sem_post(&control->sems[CRIT]);
 
-    printf("Node %d: Attempting to send byte 0x%02X to node %d\n", num, byte, next);
+#ifdef DEBUG
+    fprintf(stderr, "Node %d: Attempting to send byte 0x%02X to node %d\n", num, byte, next);
+#endif
 
-    // Check termination before waiting
+    // check termination before waiting
     if (sem_wait(&control->sems[CRIT]) < 0) {
         panic("Wait sem failed errno=%d\n", errno);
     }
-    printf("Node %d: Got CRIT semaphore\n", num);
+#ifdef DEBUG
+    fprintf(stderr, "Node %d: Got CRIT semaphore\n", num);
+#endif
     
     if (control->shared_ptr->node[num].terminate) {
-        printf("Node %d: Terminating, won't send byte\n", num);
+#ifdef DEBUG
+        fprintf(stderr, "Node %d: Terminating, won't send byte\n", num);
+#endif
         sem_post(&control->sems[CRIT]);
         return;
     }
     sem_post(&control->sems[CRIT]);
-    printf("Node %d: Released CRIT semaphore\n", num);
+#ifdef DEBUG
+    fprintf(stderr, "Node %d: Released CRIT semaphore\n", num);
+#endif
 
-    printf("Node %d: Waiting for EMPTY semaphore of node %d\n", num, next);
+#ifdef DEBUG
+    fprintf(stderr, "Node %d: Waiting for EMPTY semaphore of node %d\n", num, next);
+#endif
     if (sem_wait(&control->sems[EMPTY(next)]) < 0) {
         panic("Wait sem failed errno=%d\n", errno);
     }
-    printf("Node %d: Got EMPTY semaphore of node %d\n", num, next);
+#ifdef DEBUG
+    fprintf(stderr, "Node %d: Got EMPTY semaphore of node %d\n", num, next);
+#endif
 
     control->shared_ptr->node[next].data_xfer = byte;
-    printf("Node %d: Wrote byte 0x%02X to node %d's buffer\n", num, byte, next);
+#ifdef DEBUG
+    fprintf(stderr, "Node %d: Wrote byte 0x%02X to node %d's buffer\n", num, byte, next);
+#endif
     
     if (sem_post(&control->sems[FILLED(next)]) < 0) {
         panic("Signal sem failed errno=%d\n", errno);
     }
-    printf("Node %d: Signaled FILLED semaphore of node %d\n", num, next);
+#ifdef DEBUG
+    fprintf(stderr, "Node %d: Signaled FILLED semaphore of node %d\n", num, next);
+#endif
 }
 
 /*
@@ -443,7 +464,7 @@ rcv_byte(control, num)
 {
     unsigned char byte;
 
-    // Quick check for termination before waiting
+    // check termination before waiting
     if (sem_wait(&control->sems[CRIT]) < 0) {
         panic("Wait sem failed errno=%d\n", errno);
     }
@@ -454,35 +475,51 @@ rcv_byte(control, num)
     }
     sem_post(&control->sems[CRIT]);
 
-    printf("Node %d: Attempting to receive byte\n", num);
+#ifdef DEBUG
+    fprintf(stderr, "Node %d: Attempting to receive byte\n", num);
+#endif
 
-    // Check termination before waiting
+    // check termination before waiting
     if (sem_wait(&control->sems[CRIT]) < 0) {
         panic("Wait sem failed errno=%d\n", errno);
     }
-    printf("Node %d: Got CRIT semaphore for receive\n", num);
+#ifdef DEBUG
+    fprintf(stderr, "Node %d: Got CRIT semaphore for receive\n", num);
+#endif
     
     if (control->shared_ptr->node[num].terminate) {
-        printf("Node %d: Terminating, won't receive byte\n", num);
+#ifdef DEBUG
+        fprintf(stderr, "Node %d: Terminating, won't receive byte\n", num);
+#endif
         sem_post(&control->sems[CRIT]);
         return 0;
     }
     sem_post(&control->sems[CRIT]);
-    printf("Node %d: Released CRIT semaphore for receive\n", num);
+#ifdef DEBUG
+    fprintf(stderr, "Node %d: Released CRIT semaphore for receive\n", num);
+#endif
 
-    printf("Node %d: Waiting for FILLED semaphore\n", num);
+#ifdef DEBUG
+    fprintf(stderr, "Node %d: Waiting for FILLED semaphore\n", num);
+#endif
     if (sem_wait(&control->sems[FILLED(num)]) < 0) {
         panic("Wait sem failed errno=%d\n", errno);
     }
-    printf("Node %d: Got FILLED semaphore\n", num);
+#ifdef DEBUG
+    fprintf(stderr, "Node %d: Got FILLED semaphore\n", num);
+#endif
     
     byte = control->shared_ptr->node[num].data_xfer;
-    printf("Node %d: Read byte 0x%02X from buffer\n", num, byte);
+#ifdef DEBUG
+    fprintf(stderr, "Node %d: Read byte 0x%02X from buffer\n", num, byte);
+#endif
 
     if (sem_post(&control->sems[EMPTY(num)]) < 0) {
         panic("Signal sem failed errno=%d\n", errno);
     }
-    printf("Node %d: Signaled EMPTY semaphore\n", num);
+#ifdef DEBUG
+    fprintf(stderr, "Node %d: Signaled EMPTY semaphore\n", num);
+#endif
     
     return byte;
 }
