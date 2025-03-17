@@ -41,6 +41,7 @@ struct node_data {
 
 struct shared_data {
 	struct node_data node[N_NODES];
+    volatile int cleanup_in_progress;  // Add this field
 };
 
 /*
@@ -67,7 +68,9 @@ typedef struct TokenRingData {
     struct shared_data *shared_ptr;  
     pthread_t threads[N_NODES];
     int node_numbers[N_NODES];
-    struct token_args *thread_args;  
+    struct token_args *thread_args;
+    pthread_mutex_t mutex;  // Add mutex for thread synchronization
+    volatile int termination_flag;  // Add termination flag
 } TokenRingData;
 
 struct token_args {

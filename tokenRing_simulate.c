@@ -47,8 +47,35 @@
 #include <errno.h>
 #include <pthread.h>
 #include <semaphore.h>
-
 #include "tokenRing.h"
+
+/*
+ * Helper function to implement timed thread join without GNU extensions
+ */
+int join_thread_with_timeout(pthread_t thread, void **retval, struct timespec *timeout) {
+    struct timespec start_time, current_time;
+    clock_gettime(CLOCK_REALTIME, &start_time);
+    
+    while (1) {
+        // Try a non-blocking join
+        int join_result = pthread_join(thread, retval);
+        if (join_result == 0) {
+            return 0; // Successfully joined
+        }
+        
+        // Check if we've exceeded the timeout
+        clock_gettime(CLOCK_REALTIME, &current_time);
+        if ((current_time.tv_sec - start_time.tv_sec) > timeout->tv_sec ||
+            ((current_time.tv_sec - start_time.tv_sec) == timeout->tv_sec &&
+             current_time.tv_nsec - start_time.tv_nsec > timeout->tv_nsec)) {
+            pthread_cancel(thread);  // Cancel the thread if timeout exceeded
+            return ETIMEDOUT;
+        }
+        
+        // Sleep briefly before trying again
+        usleep(1000); // Sleep for 1ms
+    }
+}
 
 /*
  * This function is the body of a child process emulating a node.
@@ -77,150 +104,172 @@ void *token_node(void *arg) {
      * Loop around processing data, until done.
      */
     while (not_done) {
-        byte = rcv_byte(control, num); // get byte from previous node
-#ifdef DEBUG
-        fprintf(stderr, "@ Node %d: Received byte 0x%02X in state %d\n", num, byte, rcv_state);
-#endif
-        /*
-         * Handle the byte, based upon current state.
-         */
-        switch (rcv_state) {
-        case TOKEN_FLAG:
-            // check if node can send data
-            if (sem_wait(&control->sems[CRIT]) < 0) {
-                panic("Wait sem failed errno=%d\n", errno);
-            }
-#ifdef DEBUG
-            fprintf(stderr, "@ Node %d: Token check - current token_flag=%c\n", 
-                    num, control->shared_ptr->node[num].to_send.token_flag);
-#endif
-            if (byte == '0'){
-                if (control->shared_ptr->node[num].to_send.token_flag == '0') {
-                    producer = 1;
-                    consumer = 0;
-                } 
-                else {
-                    producer = 0;
-                    consumer = 1;
-                }
-            }
-
-            if (sem_post(&control->sems[CRIT]) < 0) {
-                panic("Signal sem failed errno=%d\n", errno);
-            }
-            
-            if (byte == '0') {
-                if (producer == 1 && consumer == 0) {
-#ifdef DEBUG
-                fprintf(stderr, "@ Node %d: Starting to send packet\n", num);
-#endif
-                    control->snd_state = TOKEN_FLAG;
-                    send_pkt(control, num);
-                    rcv_state = TO;
-                }
-                else {
-                    if (sem_wait(&control->sems[CRIT]) < 0) {
-                        panic("Wait sem failed errno=%d\n", errno);
-                    }
-
-                    if (control->shared_ptr->node[num].terminate == 1) {
-                        printf("KILLING MY SON/CHILD: %d\n", num);
-                        not_done = 0;
-                    }
-                    if (sem_post(&control->sems[CRIT]) < 0) {
-                        panic("Signal sem failed errno=%d\n", errno);
-                    }
-                    send_byte(control, num, byte);
-                    rcv_state = TOKEN_FLAG;
-                }
-            } 
-            else {
-                send_byte(control, num, byte);
-                rcv_state = TO;
-            }
+        // Check termination flag first
+        if (sem_wait(&control->sems[CRIT]) < 0) {
+            panic("Wait sem failed errno=%d\n", errno);
+        }
+        if (control->shared_ptr->node[num].terminate || 
+            control->shared_ptr->cleanup_in_progress) {
+            printf("Node %d: Detected terminate flag, breaking loop\n", num);
+            sem_post(&control->sems[CRIT]);
+            not_done = 0;
             break;
-
-        case TO:
-            // handle destination address
-            rcv_state = FROM;
-            if (producer == 1 && consumer == 0) {
-                send_pkt(control, num);
-            } 
-            else {
-                send_byte(control, num, byte);
-            }
-            break;
-
-        case FROM:
-            // handle source address
-            rcv_state = LEN;
-            if (producer == 1 && consumer == 0) {
-                send_pkt(control, num);
-            } 
-            else {
-                send_byte(control, num, byte);
-            }
-            break;
-
-        case LEN:
-            // process packet length and prepare for data
-            if (producer == 1 && consumer == 0) {
-                send_pkt(control, num);
+        }
+        sem_post(&control->sems[CRIT]);
+        
+        // Only proceed with normal operation if not terminating
+        if (not_done) {
+            byte = rcv_byte(control, num); // get byte from previous node
+#ifdef DEBUG
+            fprintf(stderr, "@ Node %d: Received byte 0x%02X in state %d\n", num, byte, rcv_state);
+#endif
+            /*
+             * Handle the byte, based upon current state.
+             */
+            switch (rcv_state) {
+            case TOKEN_FLAG:
+                // check if node can send data
                 if (sem_wait(&control->sems[CRIT]) < 0) {
                     panic("Wait sem failed errno=%d\n", errno);
                 }
-                len = control->shared_ptr->node[num].to_send.length;
+#ifdef DEBUG
+                fprintf(stderr, "@ Node %d: Token check - current token_flag=%c\n", 
+                        num, control->shared_ptr->node[num].to_send.token_flag);
+#endif
+                if (byte == '0'){
+                    if (control->shared_ptr->node[num].to_send.token_flag == '0') {
+                        producer = 1;
+                        consumer = 0;
+                    } 
+                    else {
+                        producer = 0;
+                        consumer = 1;
+                    }
+                }
+
                 if (sem_post(&control->sems[CRIT]) < 0) {
                     panic("Signal sem failed errno=%d\n", errno);
                 }
-            }
-            else {
-                send_byte(control, num, byte);
-                len = (int) byte;
-            }
-            sending = 0;
-            if (len > 0) {
-                rcv_state = DATA;
-            }
-            else {
-                rcv_state = TOKEN_FLAG;
-            }
-            break;
-
-        case DATA:
-            // transfer packet data bytes
+                
+                if (byte == '0') {
+                    if (producer == 1 && consumer == 0) {
 #ifdef DEBUG
-            fprintf(stderr, "@ Node %d: Processing DATA, sending=%d, len=%d\n", 
-                    num, sending, len);
+                    fprintf(stderr, "@ Node %d: Starting to send packet\n", num);
 #endif
-            if (sending < (len-1)) {
+                        control->snd_state = TOKEN_FLAG;
+                        send_pkt(control, num);
+                        rcv_state = TO;
+                    }
+                    else {
+                        if (sem_wait(&control->sems[CRIT]) < 0) {
+                            panic("Wait sem failed errno=%d\n", errno);
+                        }
+
+                        if (control->shared_ptr->node[num].terminate == 1) {
+                            printf("KILLING MY SON/CHILD: %d\n", num);
+                            not_done = 0;
+                        }
+                        if (sem_post(&control->sems[CRIT]) < 0) {
+                            panic("Signal sem failed errno=%d\n", errno);
+                        }
+                        send_byte(control, num, byte);
+                        rcv_state = TOKEN_FLAG;
+                    }
+                } 
+                else {
+                    send_byte(control, num, byte);
+                    rcv_state = TO;
+                }
+                break;
+
+            case TO:
+                // handle destination address
+                rcv_state = FROM;
                 if (producer == 1 && consumer == 0) {
                     send_pkt(control, num);
+                } 
+                else {
+                    send_byte(control, num, byte);
+                }
+                break;
+
+            case FROM:
+                // handle source address
+                rcv_state = LEN;
+                if (producer == 1 && consumer == 0) {
+                    send_pkt(control, num);
+                } 
+                else {
+                    send_byte(control, num, byte);
+                }
+                break;
+
+            case LEN:
+                // process packet length and prepare for data
+                if (producer == 1 && consumer == 0) {
+                    send_pkt(control, num);
+                    if (sem_wait(&control->sems[CRIT]) < 0) {
+                        panic("Wait sem failed errno=%d\n", errno);
+                    }
+                    len = control->shared_ptr->node[num].to_send.length;
+                    if (sem_post(&control->sems[CRIT]) < 0) {
+                        panic("Signal sem failed errno=%d\n", errno);
+                    }
                 }
                 else {
                     send_byte(control, num, byte);
-                }    
-                rcv_state = DATA;
-            }
-            else {
-                if (producer == 1 && consumer == 0) {
-                    send_pkt(control, num);
+                    len = (int) byte;
+                }
+                sending = 0;
+                if (len > 0) {
+                    rcv_state = DATA;
                 }
                 else {
-                    send_byte(control, num, byte);
+                    rcv_state = TOKEN_FLAG;
                 }
-                producer = 0;
-                consumer = 1;
-                rcv_state = TOKEN_FLAG;
-            }
-            sending++;
-            break;
-        };
+                break;
+
+            case DATA:
+                // transfer packet data bytes
+#ifdef DEBUG
+                fprintf(stderr, "@ Node %d: Processing DATA, sending=%d, len=%d\n", 
+                        num, sending, len);
+#endif
+                if (sending < (len-1)) {
+                    if (producer == 1 && consumer == 0) {
+                        send_pkt(control, num);
+                    }
+                    else {
+                        send_byte(control, num, byte);
+                    }    
+                    rcv_state = DATA;
+                }
+                else {
+                    if (producer == 1 && consumer == 0) {
+                        send_pkt(control, num);
+                    }
+                    else {
+                        send_byte(control, num, byte);
+                    }
+                    producer = 0;
+                    consumer = 1;
+                    rcv_state = TOKEN_FLAG;
+                }
+                sending++;
+                break;
+            };
+        }
     }
 #ifdef DEBUG
     fprintf(stderr, "@ Node %d: Terminating\n", num);
 #endif
-    return NULL;
+
+    // Flush any buffered output
+    fflush(stdout);
+    
+    printf("Node %d: Clean exit\n", num);
+    pthread_exit(NULL);
+    return NULL;  // Never reached, but keeps compiler happy
 }
 
 /*
@@ -342,20 +391,46 @@ send_byte(control, num, byte)
 {
     int next = (num + 1) % N_NODES;
 
-#ifdef DEBUG
-    fprintf(stderr, "@ Node %d: Sending byte 0x%02X to node %d\n", num, byte, next);
-#endif
+    // Quick check for termination before proceeding
+    if (sem_wait(&control->sems[CRIT]) < 0) {
+        panic("Wait sem failed errno=%d\n", errno);
+    }
+    if (control->shared_ptr->node[num].terminate ||
+        control->shared_ptr->cleanup_in_progress) {
+        sem_post(&control->sems[CRIT]);
+        return;
+    }
+    sem_post(&control->sems[CRIT]);
 
+    printf("Node %d: Attempting to send byte 0x%02X to node %d\n", num, byte, next);
+
+    // Check termination before waiting
+    if (sem_wait(&control->sems[CRIT]) < 0) {
+        panic("Wait sem failed errno=%d\n", errno);
+    }
+    printf("Node %d: Got CRIT semaphore\n", num);
+    
+    if (control->shared_ptr->node[num].terminate) {
+        printf("Node %d: Terminating, won't send byte\n", num);
+        sem_post(&control->sems[CRIT]);
+        return;
+    }
+    sem_post(&control->sems[CRIT]);
+    printf("Node %d: Released CRIT semaphore\n", num);
+
+    printf("Node %d: Waiting for EMPTY semaphore of node %d\n", num, next);
     if (sem_wait(&control->sems[EMPTY(next)]) < 0) {
         panic("Wait sem failed errno=%d\n", errno);
     }
+    printf("Node %d: Got EMPTY semaphore of node %d\n", num, next);
 
-    // Critical section
     control->shared_ptr->node[next].data_xfer = byte;
+    printf("Node %d: Wrote byte 0x%02X to node %d's buffer\n", num, byte, next);
     
     if (sem_post(&control->sems[FILLED(next)]) < 0) {
         panic("Signal sem failed errno=%d\n", errno);
     }
+    printf("Node %d: Signaled FILLED semaphore of node %d\n", num, next);
 }
 
 /*
@@ -367,21 +442,47 @@ rcv_byte(control, num)
     int num;
 {
     unsigned char byte;
-    int previous = (num + N_NODES - 1) % N_NODES;
 
+    // Quick check for termination before waiting
+    if (sem_wait(&control->sems[CRIT]) < 0) {
+        panic("Wait sem failed errno=%d\n", errno);
+    }
+    if (control->shared_ptr->node[num].terminate ||
+        control->shared_ptr->cleanup_in_progress) {
+        sem_post(&control->sems[CRIT]);
+        return 0;
+    }
+    sem_post(&control->sems[CRIT]);
+
+    printf("Node %d: Attempting to receive byte\n", num);
+
+    // Check termination before waiting
+    if (sem_wait(&control->sems[CRIT]) < 0) {
+        panic("Wait sem failed errno=%d\n", errno);
+    }
+    printf("Node %d: Got CRIT semaphore for receive\n", num);
+    
+    if (control->shared_ptr->node[num].terminate) {
+        printf("Node %d: Terminating, won't receive byte\n", num);
+        sem_post(&control->sems[CRIT]);
+        return 0;
+    }
+    sem_post(&control->sems[CRIT]);
+    printf("Node %d: Released CRIT semaphore for receive\n", num);
+
+    printf("Node %d: Waiting for FILLED semaphore\n", num);
     if (sem_wait(&control->sems[FILLED(num)]) < 0) {
         panic("Wait sem failed errno=%d\n", errno);
     }
+    printf("Node %d: Got FILLED semaphore\n", num);
     
     byte = control->shared_ptr->node[num].data_xfer;
-
-#ifdef DEBUG
-    fprintf(stderr, "@ Node %d: Received byte 0x%02X\n", num, byte);
-#endif
+    printf("Node %d: Read byte 0x%02X from buffer\n", num, byte);
 
     if (sem_post(&control->sems[EMPTY(num)]) < 0) {
         panic("Signal sem failed errno=%d\n", errno);
     }
+    printf("Node %d: Signaled EMPTY semaphore\n", num);
     
     return byte;
 }

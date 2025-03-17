@@ -3,6 +3,8 @@
         "pthread.h": "c",
         "cstddef": "c",
         "errno.h": "c",
-        "stdlib.h": "c"
+        "stdlib.h": "c",
+        "system_error": "c",
+        "tokenring.h": "c"
     }
 }
