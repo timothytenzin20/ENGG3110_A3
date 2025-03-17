@@ -89,7 +89,9 @@ token_node(control, num)
 		switch (rcv_state) {
 		case TOKEN_FLAG:
 			// check if node can send data
-			WAIT_SEM(control, CRIT);
+			if (sem_wait(&control->sems[CRIT]) < 0) {
+				panic("Wait sem failed errno=%d\n", errno);
+			}
 #ifdef DEBUG
             fprintf(stderr, "@ Node %d: Token check - current token_flag=%c\n", 
                     num, control->shared_ptr->node[num].to_send.token_flag);
@@ -105,7 +107,9 @@ token_node(control, num)
 				}
 			}
 
-			SIGNAL_SEM(control, CRIT);
+			if (sem_post(&control->sems[CRIT]) < 0) {
+				panic("Signal sem failed errno=%d\n", errno);
+			}
 			
 			if (byte == '0') {
 				if (producer == 1 && consumer == 0) {
@@ -117,13 +121,17 @@ token_node(control, num)
 					rcv_state = TO;
 				}
 				else {
-					WAIT_SEM(control, CRIT);
+					if (sem_wait(&control->sems[CRIT]) < 0) {
+						panic("Wait sem failed errno=%d\n", errno);
+					}
 
 					if (control->shared_ptr->node[num].terminate == 1) {
 						printf("KILLING MY SON/CHILD: %d\n", num);
 						not_done = 0;
 					}
-					SIGNAL_SEM(control, CRIT);
+					if (sem_post(&control->sems[CRIT]) < 0) {
+						panic("Signal sem failed errno=%d\n", errno);
+					}
 					send_byte(control, num, byte);
 					rcv_state = TOKEN_FLAG;
 				}
@@ -160,9 +168,13 @@ token_node(control, num)
 			// process packet length and prepare for data
 			if (producer == 1 && consumer == 0) {
 				send_pkt(control, num);
-				WAIT_SEM(control, CRIT);
+				if (sem_wait(&control->sems[CRIT]) < 0) {
+					panic("Wait sem failed errno=%d\n", errno);
+				}
 				len = control->shared_ptr->node[num].to_send.length;
-				SIGNAL_SEM(control, CRIT);
+				if (sem_post(&control->sems[CRIT]) < 0) {
+					panic("Signal sem failed errno=%d\n", errno);
+				}
 			}
 			else {
 				send_byte(control, num, byte);
@@ -230,20 +242,28 @@ send_pkt(control, num)
 #ifdef DEBUG
         fprintf(stderr, "@ Node %d: Sending packet header\n", num);
 #endif
-        WAIT_SEM(control, CRIT);
+        if (sem_wait(&control->sems[CRIT]) < 0) {
+			panic("Wait sem failed errno=%d\n", errno);
+		}
         control->shared_ptr->node[num].sent++;
         node_index = (int) control->shared_ptr->node[num].to_send.to; // get destination node
         control->shared_ptr->node[node_index].received++; 
         control->shared_ptr->node[num].to_send.token_flag = '1';
-        SIGNAL_SEM(control, CRIT);
+        if (sem_post(&control->sems[CRIT]) < 0) {
+			panic("Signal sem failed errno=%d\n", errno);
+		}
         
         send_byte(control, num, control->shared_ptr->node[num].to_send.token_flag);
         control->snd_state = TO;
         sndpos = 0;
         
-        WAIT_SEM(control, CRIT);
+        if (sem_wait(&control->sems[CRIT]) < 0) {
+			panic("Wait sem failed errno=%d\n", errno);
+		}
         sndlen = control->shared_ptr->node[num].to_send.length;
-        SIGNAL_SEM(control, CRIT);
+        if (sem_post(&control->sems[CRIT]) < 0) {
+			panic("Signal sem failed errno=%d\n", errno);
+		}
         break;
 
     case TO:
@@ -276,9 +296,13 @@ send_pkt(control, num)
 			control->snd_state = DATA;
 			break;
 		} else {
-			WAIT_SEM(control, CRIT);
+			if (sem_wait(&control->sems[CRIT]) < 0) {
+				panic("Wait sem failed errno=%d\n", errno);
+			}
 			control->snd_state = DONE;
-			SIGNAL_SEM(control, CRIT);
+			if (sem_post(&control->sems[CRIT]) < 0) {
+				panic("Signal sem failed errno=%d\n", errno);
+			}
 		}
 
 	case DONE:
@@ -286,7 +310,9 @@ send_pkt(control, num)
 #ifdef DEBUG
         fprintf(stderr, "@ Node %d: Packet transmission complete\n", num);
 #endif
-		WAIT_SEM(control, CRIT);
+		if (sem_wait(&control->sems[CRIT]) < 0) {
+			panic("Wait sem failed errno=%d\n", errno);
+		}
         printf("\ncontents at node: %d is: ", num);
         for (node_index = 0; node_index < control->shared_ptr->node[num].to_send.length; node_index++) { 
             printf("%c", control->shared_ptr->node[num].to_send.data[node_index]);
@@ -296,8 +322,12 @@ send_pkt(control, num)
         
         control->snd_state = TOKEN_FLAG;
         send_byte(control, num, '0');
-        SIGNAL_SEM(control, TO_SEND(num));
-        SIGNAL_SEM(control, CRIT);
+        if (sem_post(&control->sems[TO_SEND(num)]) < 0) {
+			panic("Signal sem failed errno=%d\n", errno);
+		}
+        if (sem_post(&control->sems[CRIT]) < 0) {
+			panic("Signal sem failed errno=%d\n", errno);
+		}
         break;
 	};
 }
@@ -316,9 +346,13 @@ send_byte(control, num, byte)
 #ifdef DEBUG
     fprintf(stderr, "@ Node %d: Sending byte 0x%02X to node %d\n", num, byte, next);
 #endif
-	WAIT_SEM(control, EMPTY(next));
+	if (sem_wait(&control->sems[EMPTY(next)]) < 0) {
+		panic("Wait sem failed errno=%d\n", errno);
+	}
 	control->shared_ptr->node[next].data_xfer = byte;
-	SIGNAL_SEM(control, FILLED(next));
+	if (sem_post(&control->sems[FILLED(next)]) < 0) {
+		panic("Signal sem failed errno=%d\n", errno);
+	}
 }
 
 /*
@@ -332,13 +366,16 @@ rcv_byte(control, num)
 	// get byte from previous node in ring
 	unsigned char byte;
 	int previous = (num + N_NODES - 1) % N_NODES;
-	WAIT_SEM(control, FILLED(previous));
+	if (sem_wait(&control->sems[FILLED(previous)]) < 0) {
+		panic("Wait sem failed errno=%d\n", errno);
+	}
 	byte = control->shared_ptr->node[previous].data_xfer;
 #ifdef DEBUG
 	fprintf(stderr, "@ Node %d: Received byte 0x%02X\n", num, byte);
 #endif
-	SIGNAL_SEM(control, EMPTY(previous));
+	if (sem_post(&control->sems[EMPTY(previous)]) < 0) {
+		panic("Signal sem failed errno=%d\n", errno);
+	}
 	
 	return byte;
 }
-

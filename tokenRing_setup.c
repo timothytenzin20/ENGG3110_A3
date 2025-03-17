@@ -52,7 +52,8 @@
 #include <stdarg.h>
 #include <string.h>
 #include <errno.h>
-
+#include <pthread.h>
+#include <semaphore.h>
 #include "tokenRing.h"
 
 /*
@@ -70,6 +71,17 @@ setupSystem()
 	struct TokenRingData *control;
 
 	control = (struct TokenRingData *) malloc(sizeof(struct TokenRingData));
+	if (!control) {
+		fprintf(stderr, "Failed to allocate control structure\n");
+		return NULL;
+	}
+
+	// Allocate semaphore array
+	control->sems = malloc(NUM_SEM * sizeof(sem_t));
+	if (!control->sems) {
+		fprintf(stderr, "Failed to allocate semaphore array\n");
+		goto FAIL;
+	}
 
 	/*
 	 * Seed the random number generator.
@@ -77,50 +89,31 @@ setupSystem()
 	srandom(time(0));
 
 	/*
-	 * Create the shared memory region.
+	 * Allocate shared data using malloc instead of shared memory
 	 */
-	control->shmid = shmget(IPC_PRIVATE, sizeof (struct shared_data), 0600);
-	if (control->shmid < 0) {
-		fprintf(stderr, "Can't create shared memory region\n");
+	control->shared_ptr = (struct shared_data *)malloc(sizeof(struct shared_data));
+	if (!control->shared_ptr) {
+		fprintf(stderr, "Failed to allocate shared data\n");
 		goto FAIL;
 	}
 
 	/*
-	 * and map the shared data region into our address space at an
-	 * address selected by Linux.
-	 */
-	control->shared_ptr = (struct shared_data *)
-	    	shmat(control->shmid, (char *)0, 0);
-	if (control->shared_ptr == (struct shared_data *)0) {
-		fprintf(stderr, "Can't map shared memory region\n");
-		goto FAIL;
-	}
-
-	/*
-	 * Now, create the semaphores, by creating the semaphore set.
-	 * Under Linux, semaphore sets are stored in an area of memory
-	 * handled much like a shared region. (A semaphore set is simply
-	 * a bunch of semaphores allocated to-gether.)
-	 */
-	control->semid = semget(IPC_PRIVATE, NUM_SEM, 0600);
-	if (control->semid < 0) {
-		fprintf(stderr, "Can't create semaphore set\n");
-		goto FAIL;
-	}
-
-	/*
-	 * and initialize them.
-	 * Semaphores are meaningless if they are not initialized.
+	 * Initialize POSIX semaphores
 	 */
 	for (i = 0; i < N_NODES; i++) {
-		INITIALIZE_SEM(control, EMPTY(i), 1);    
-		INITIALIZE_SEM(control, FILLED(i), 0);   // no data initially
-		// packet control semaphores
-		INITIALIZE_SEM(control, TO_SEND(i), 1);  // initially prepared to send 
+		if (sem_init(&control->sems[EMPTY(i)], 0, 1) < 0 ||
+			sem_init(&control->sems[FILLED(i)], 0, 0) < 0 ||
+			sem_init(&control->sems[TO_SEND(i)], 0, 1) < 0) {
+			fprintf(stderr, "Failed to initialize semaphores for node %d\n", i);
+			goto FAIL;
+		}
 	}
 
-	// critical section semaphore
-	INITIALIZE_SEM(control, CRIT, 1);    // shared data access
+	// Initialize critical section semaphore
+	if (sem_init(&control->sems[CRIT], 0, 1) < 0) {
+		fprintf(stderr, "Failed to initialize critical semaphore\n");
+		goto FAIL;
+	}
 
 	/*
 	 * And initialize the shared data
@@ -142,7 +135,17 @@ setupSystem()
 	return control;
 
 FAIL:
-	free(control);
+	if (control) {
+		if (control->sems) {
+			// Clean up any initialized semaphores
+			for (i = 0; i < NUM_SEM; i++) {
+				sem_destroy(&control->sems[i]);
+			}
+			free(control->sems);
+		}
+		if (control->shared_ptr) free(control->shared_ptr);
+		free(control);
+	}
 	return NULL;
 }
 
@@ -152,52 +155,49 @@ runSimulation(control, numberOfPackets)
 	struct TokenRingData *control;
 	int numberOfPackets;
 {
-	int num, to;
 	int i;
-    pid_t pid; // process ID 
 
 	/*
-	 * Fork off the children that simulate the disks.
+	 * Create threads that simulate the nodes.
+	 * Store thread IDs and node numbers for each thread
 	 */
 	for (i = 0; i < N_NODES; i++) {
-        pid = fork();
-        
-        if (pid < 0) {
-            // failed
-            panic("Fork failed for node %d\n", i);
-        }
-        else if (pid == 0) {
-            // child process
-            token_node(control, i);  // node simulation
-            exit(0);  // exit upon completion
-        }
-        else{
-			// parent process
-			continue;
+		control->node_numbers[i] = i;  // Store node number
+		if (pthread_create(&control->threads[i], NULL, 
+			(void *(*)(void *))token_node, 
+			(void *)&control->node_numbers[i]) != 0) {
+			panic("Thread creation failed for node %d\n", i);
 		}
-
-    }
+#ifdef DEBUG
+		fprintf(stderr, "Created thread for node %d\n", i);
+#endif
+	}
 
 	/*
 	 * Loop around generating packets at random.
-	 * (the parent)
 	 */
 	for (i = 0; i < numberOfPackets; i++) {
-		/*
-		 * Add a packet to be sent to to_send for that node.
-		 */
 #ifdef DEBUG
 		fprintf(stderr, "Main in generate packets\n");
 #endif
-		num = random() % N_NODES;
-		WAIT_SEM(control, TO_SEND(num));
-		WAIT_SEM(control, CRIT);
-		if (control->shared_ptr->node[num].to_send.length > 0)
+		int num = random() % N_NODES;
+
+		// Use direct POSIX semaphore calls
+		if (sem_wait(&control->sems[TO_SEND(num)]) < 0) {
+			panic("Wait sem failed errno=%d\n", errno);
+		}
+		if (sem_wait(&control->sems[CRIT]) < 0) {
+			panic("Wait sem failed errno=%d\n", errno);
+		}
+
+		if (control->shared_ptr->node[num].to_send.length > 0) {
+			sem_post(&control->sems[CRIT]);  // Release critical section before panic
 			panic("to_send filled\n");
+		}
 
 		control->shared_ptr->node[num].to_send.token_flag = '0';
 
-
+		int to;
 		do {
 			to = random() % N_NODES;
 		} while (to == num);
@@ -208,10 +208,39 @@ runSimulation(control, numberOfPackets)
 		
 		// initialize packet data with test content
 		for (int j = 0; j < control->shared_ptr->node[num].to_send.length; j++) {
-			control->shared_ptr->node[num].to_send.data[j] = 'A' + (j % 26); // fill with A-Z repeatedly
+			control->shared_ptr->node[num].to_send.data[j] = 'A' + (j % 26);
 		}
 
-		SIGNAL_SEM(control, CRIT);
+		if (sem_post(&control->sems[CRIT]) < 0) {
+			panic("Signal sem failed errno=%d\n", errno);
+		}
+		if (sem_post(&control->sems[TO_SEND(num)]) < 0) {
+			panic("Signal sem failed errno=%d\n", errno);
+		}
+	}
+
+	// Update other semaphore operations similarly
+	if (sem_wait(&control->sems[CRIT]) < 0) {
+		panic("Wait sem failed errno=%d\n", errno);
+	}
+	for (i = 0; i < N_NODES; i++) {
+		control->shared_ptr->node[i].terminate = 1;
+	}
+	if (sem_post(&control->sems[CRIT]) < 0) {
+		panic("Signal sem failed errno=%d\n", errno);
+	}
+
+	/* 
+	 * Wait for all threads to complete using pthread_join
+	 */
+	for (i = 0; i < N_NODES; i++) {
+		void *thread_result;
+		if (pthread_join(control->threads[i], &thread_result) != 0) {
+			panic("Thread join failed for node %d\n", i);
+		}
+#ifdef DEBUG
+		fprintf(stderr, "Thread for node %d completed\n", i);
+#endif
 	}
 
 	return 1;
@@ -221,53 +250,51 @@ int
 cleanupSystem(control)
 	struct TokenRingData *control;
 {
-    int child_status;
-	union semun zeroSemun;
 	int i;
 
-	bzero(&zeroSemun, sizeof(union semun));
 	/*
 	 * Now wait for all nodes to finish sending and then tell them
 	 * to terminate.
 	 */
-	for (i = 0; i < N_NODES; i++){
-		WAIT_SEM(control, TO_SEND(i));
+	for (i = 0; i < N_NODES; i++) {
+		if (sem_wait(&control->sems[TO_SEND(i)]) < 0) {
+			panic("Wait sem failed errno=%d\n", errno);
+		}
 	}
-	WAIT_SEM(control, CRIT);
-	for (i = 0; i < N_NODES; i++){
+	
+	if (sem_wait(&control->sems[CRIT]) < 0) {
+		panic("Wait sem failed errno=%d\n", errno);
+	}
+	for (i = 0; i < N_NODES; i++) {
 		control->shared_ptr->node[i].terminate = 1;
 	}
-	SIGNAL_SEM(control, CRIT);
+	if (sem_post(&control->sems[CRIT]) < 0) {
+		panic("Signal sem failed errno=%d\n", errno);
+	}
 
-#ifdef DEBUG
-	fprintf(stderr, "wait for children to terminate\n");
-#endif
-	/*
-	 * Wait for the node processes to terminate.
-	 */
-	for (i = 0; i < N_NODES; i++)
-		wait(&child_status);
-
-	/*
+	/* 
 	 * All done, just print out the results.
 	 */
-	for (i = 0; i < N_NODES; i++)
+	for (i = 0; i < N_NODES; i++) {
 		printf("Node %d: sent=%d received=%d\n", i,
 			control->shared_ptr->node[i].sent,
 			control->shared_ptr->node[i].received);
+	}
+
 #ifdef DEBUG
-	fprintf(stderr, "parent at destroy shared memory\n");
+	fprintf(stderr, "cleaning up resources\n");
 #endif
+
 	/*
-	 * And destroy the shared data area and semaphore set.
-	 * First detach the shared memory segment via shmdt() and then
-	 * destroy it with shmctl() using the IPC_RMID command.
-	 * Destroy the semaphore set in a similar manner using a semctl()
-	 * call with the IPC_RMID command.
+	 * Cleanup resources in correct order:
 	 */
-	shmdt((char *)control->shared_ptr);
-	shmctl(control->shmid, IPC_RMID, (struct shmid_ds *)0);
-	semctl(control->semid, 0, IPC_RMID, zeroSemun);
+	for (i = 0; i < NUM_SEM; i++) {
+		sem_destroy(&control->sems[i]);
+	}
+
+	free(control->sems);
+	free(control->shared_ptr);
+	free(control);
 
 	return 1;
 }
@@ -287,4 +314,3 @@ panic(const char *fmt, ...)
 
 	exit(5);
 }
-

@@ -3,7 +3,7 @@ CFLAGS		= -pedantic -Wall -DDEBUG
 
 EXE		= tokensim
 
-TARFILE		= A2.tar
+TARFILE		= A3.tar
 
 OBJS		= \
 		tokenRing_main.o \
@@ -11,7 +11,7 @@ OBJS		= \
 		tokenRing_simulate.o
 
 $(EXE) : $(OBJS)
-	$(CC) -o $(EXE) $(OBJS)
+	$(CC) -o $(EXE) $(OBJS) -lpthread
 
 clean :
 	@ rm -f $(OBJS)

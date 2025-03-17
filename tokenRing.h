@@ -1,6 +1,7 @@
 #ifndef __TOKEN_CONTROL_HEADER__
 #define __TOKEN_CONTROL_HEADER__
-
+#include <pthread.h>
+#include <semaphore.h>
 /*
  * Define any handy constants and structures.
  * Also define the functions.
@@ -60,59 +61,12 @@ struct shared_data {
 #define	FILLED(n)	(FILLED0 + (n))
 #define	TO_SEND(n)	(TO_SEND0 + (n))
 
-/*
- * The Linux semaphore ops are done using the fields of sembuf.
- * sem_num - Which semaphore of the set, as defined below
- * sem_op  - set to 1 for "signal" and -1 for "wait"
- * sem_flg - set to 0 for our purposes
- * The macros WAIT_SEM, SIGNAL_SEM and INITIALIZE_SEM are defined
- * to, hopefully, simplify the code.
- */
-/*
- * POSIX Now says this can't be in sem.h, so we have to put it in
- * ourselves? (It was in sys/sem.h in RedHat 5.2)
- */
-union semun {
-	int val;
-	struct semid_ds *buf;
-	unsigned short int *array;
-	struct seminfo *__buf;
-};
-
-
-#define	WAIT_SEM(c,s) { \
-	struct sembuf sb; \
-	sb.sem_num = (s); \
-	sb.sem_op = -1; \
-	sb.sem_flg = 0; \
-	if (semop((c)->semid, &sb, 1) < 0) { \
-		fprintf(stderr, "Wait sem failed errno=%d\n", errno); \
-		exit(4); \
-	} }
-
-#define	SIGNAL_SEM(c,s) { \
-	struct sembuf sb; \
-	sb.sem_num = (s); \
-	sb.sem_op = 1; \
-	sb.sem_flg = 0; \
-	if (semop((c)->semid, &sb, 1) < 0) { \
-		fprintf(stderr, "Signal sem failed errno=%d\n", errno); \
-		exit(4); \
-	} }
-
-#define INITIALIZE_SEM(c, s, n) { \
-	union semun semarg; \
-	semarg.val = (n); \
-	if (semctl((c)->semid, (s), SETVAL, semarg) < 0) { \
-		fprintf(stderr, "Initialize sem failed errno=%d\n", errno); \
-		exit(4); \
-	} }
-
 typedef struct TokenRingData {
-    int semid;
-    int shmid;
+    sem_t *sems;  // Array of POSIX semaphores
     int snd_state;
-    struct shared_data *shared_ptr;
+    struct shared_data *shared_ptr;  
+    pthread_t threads[N_NODES];
+    int node_numbers[N_NODES];
 } TokenRingData;
 
 /** prototypes */
