@@ -67,7 +67,13 @@ typedef struct TokenRingData {
     struct shared_data *shared_ptr;  
     pthread_t threads[N_NODES];
     int node_numbers[N_NODES];
+    struct token_args *thread_args;  
 } TokenRingData;
+
+struct token_args {
+    struct TokenRingData *control;
+    int node_num;
+};
 
 /** prototypes */
 void panic(const char *fmt, ...);
@@ -79,6 +85,6 @@ int cleanupSystem(struct TokenRingData *simulationData);
 unsigned char rcv_byte(struct TokenRingData *control, int num);
 void send_byte(struct TokenRingData *control, int num, unsigned byte);
 void send_pkt(struct TokenRingData *control, int num);
-void token_node(struct TokenRingData *control, int num);
+void *token_node(void *arg);
 
 #endif /* __TOKEN_CONTROL_HEADER__ */

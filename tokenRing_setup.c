@@ -76,70 +76,65 @@ setupSystem()
 		return NULL;
 	}
 
-	// Allocate semaphore array
+	// Allocate semaphore array - each semaphore needs its own allocation
 	control->sems = malloc(NUM_SEM * sizeof(sem_t));
 	if (!control->sems) {
 		fprintf(stderr, "Failed to allocate semaphore array\n");
-		goto FAIL;
+		free(control);
+		return NULL;
 	}
 
-	/*
-	 * Seed the random number generator.
-	 */
-	srandom(time(0));
-
-	/*
-	 * Allocate shared data using malloc instead of shared memory
-	 */
+	// Allocate shared data
 	control->shared_ptr = (struct shared_data *)malloc(sizeof(struct shared_data));
 	if (!control->shared_ptr) {
 		fprintf(stderr, "Failed to allocate shared data\n");
+		free(control->sems);
+		free(control);
+		return NULL;
+	}
+
+	// Allocate thread arguments array
+	control->thread_args = malloc(N_NODES * sizeof(struct token_args));
+	if (!control->thread_args) {
+		fprintf(stderr, "Failed to allocate thread arguments\n");
 		goto FAIL;
 	}
 
-	/*
-	 * Initialize POSIX semaphores
-	 */
-	for (i = 0; i < N_NODES; i++) {
-		if (sem_init(&control->sems[EMPTY(i)], 0, 1) < 0 ||
-			sem_init(&control->sems[FILLED(i)], 0, 0) < 0 ||
-			sem_init(&control->sems[TO_SEND(i)], 0, 1) < 0) {
-			fprintf(stderr, "Failed to initialize semaphores for node %d\n", i);
+	// Initialize all semaphores
+	for (i = 0; i < NUM_SEM; i++) {
+		if (sem_init(&control->sems[i], 0, (i < N_NODES || i >= FILLED0 + N_NODES) ? 1 : 0) < 0) {
+			fprintf(stderr, "Failed to initialize semaphore %d\n", i);
 			goto FAIL;
 		}
 	}
 
-	// Initialize critical section semaphore
-	if (sem_init(&control->sems[CRIT], 0, 1) < 0) {
-		fprintf(stderr, "Failed to initialize critical semaphore\n");
-		goto FAIL;
-	}
-
-	/*
-	 * And initialize the shared data
-	 */
+	// Initialize node data
 	for (i = 0; i < N_NODES; i++) {
-		// all empty at initialization	
 		control->shared_ptr->node[i].sent = 0;
 		control->shared_ptr->node[i].received = 0;
 		control->shared_ptr->node[i].terminate = 0;
 		control->shared_ptr->node[i].to_send.length = 0;
 		control->shared_ptr->node[i].data_xfer = 0;
-		control->shared_ptr->node[i].to_send.token_flag = '1'; 
+		control->shared_ptr->node[i].to_send.token_flag = '1';
+		control->node_numbers[i] = i;  // Pre-initialize node numbers
 	}
 
-#ifdef DEBUG
-	fprintf(stderr, "main after initialization\n");
-#endif
+	// Initialize thread arguments
+	for (i = 0; i < N_NODES; i++) {
+		control->thread_args[i].control = control;
+		control->thread_args[i].node_num = i;
+	}
 
+	srandom(time(0));
 	return control;
 
 FAIL:
 	if (control) {
+		if (control->thread_args) free(control->thread_args);
 		if (control->sems) {
-			// Clean up any initialized semaphores
-			for (i = 0; i < NUM_SEM; i++) {
-				sem_destroy(&control->sems[i]);
+			// Destroy any initialized semaphores
+			for (int j = 0; j < i; j++) {
+				sem_destroy(&control->sems[j]);
 			}
 			free(control->sems);
 		}
@@ -148,7 +143,6 @@ FAIL:
 	}
 	return NULL;
 }
-
 
 int
 runSimulation(control, numberOfPackets)
@@ -164,8 +158,7 @@ runSimulation(control, numberOfPackets)
 	for (i = 0; i < N_NODES; i++) {
 		control->node_numbers[i] = i;  // Store node number
 		if (pthread_create(&control->threads[i], NULL, 
-			(void *(*)(void *))token_node, 
-			(void *)&control->node_numbers[i]) != 0) {
+			token_node, &control->thread_args[i]) != 0) {
 			panic("Thread creation failed for node %d\n", i);
 		}
 #ifdef DEBUG
@@ -292,6 +285,7 @@ cleanupSystem(control)
 		sem_destroy(&control->sems[i]);
 	}
 
+	free(control->thread_args);
 	free(control->sems);
 	free(control->shared_ptr);
 	free(control);
