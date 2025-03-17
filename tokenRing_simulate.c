@@ -35,10 +35,10 @@
 • source: https://github.com/kernohad/Token-ring-communication-simulation/blob/master/simulation.c
 */
 /*
-*	CIS3110: Assignment 2
+*	CIS3110: Assignment 3
 *	Submitted To: Andrew-Hamilton Wright
 * 	Submitted By: Timothy Khan 1239165
-*	Date: February 24, 2025
+*	Date: March 17, 2025
 */
 
 /*
