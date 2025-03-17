@@ -1,4 +1,14 @@
 /* References
+• author: Oros Tom
+• name: C/Linux: Alternating between threads
+• year: 2021
+• https://stackoverflow.com/questions/61270398/c-linux-alternating-between-threads
+
+• author: Andrew Hamilton-Wright
+• name: semaphore_pthreads_demo.c
+• year: 2001
+• source: Course Directory
+
 • author: Andrew Hamilton-Wright
 • name: semaphore_process_demo.c
 • year: 2001

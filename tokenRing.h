@@ -41,7 +41,7 @@ struct node_data {
 
 struct shared_data {
 	struct node_data node[N_NODES];
-    volatile int cleanup_in_progress;  // Add this field
+    volatile int cleanup_in_progress;  
 };
 
 /*
@@ -63,14 +63,14 @@ struct shared_data {
 #define	TO_SEND(n)	(TO_SEND0 + (n))
 
 typedef struct TokenRingData {
-    sem_t *sems;  // Array of POSIX semaphores
+    sem_t *sems;  
     int snd_state;
     struct shared_data *shared_ptr;  
     pthread_t threads[N_NODES];
     int node_numbers[N_NODES];
     struct token_args *thread_args;
-    pthread_mutex_t mutex;  // Add mutex for thread synchronization
-    volatile int termination_flag;  // Add termination flag
+    pthread_mutex_t mutex;  
+    volatile int termination_flag;  
 } TokenRingData;
 
 struct token_args {
